@@ -124,7 +124,7 @@ impl HttpClient {
         let request = if !self.request_config.assert_identity {
             self.try_into_http_request(request, session, config).await?
         } else {
-            self.try_into_http_request_with_identy_assertion(request, session, config).await?
+            self.try_into_http_request_with_identity_assertion(request, session, config).await?
         };
 
         self.inner.send_request(request, config).await
@@ -168,7 +168,7 @@ impl HttpClient {
     }
 
     #[cfg(feature = "appservice")]
-    async fn try_into_http_request_with_identy_assertion<Request: OutgoingRequest>(
+    async fn try_into_http_request_with_identity_assertion<Request: OutgoingRequest>(
         &self,
         request: Request,
         session: Arc<RwLock<Option<Session>>>,
