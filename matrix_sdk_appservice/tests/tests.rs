@@ -11,7 +11,11 @@ use matrix_sdk::{
     EventHandler, Raw,
 };
 use matrix_sdk_appservice::*;
-use matrix_sdk_test::async_test;
+use matrix_sdk_test::{
+    appservice::{value_with_room_id, TransactionBuilder},
+    async_test, test_json, EventsJson,
+};
+use sdk::{ClientConfig, RequestConfig};
 use serde_json::json;
 #[cfg(feature = "warp")]
 use warp::Reply;
@@ -35,56 +39,63 @@ async fn appservice(registration: Option<Registration>) -> Result<Appservice> {
     let homeserver_url = mockito::server_url();
     let server_name = "localhost";
 
-    Ok(Appservice::new(homeserver_url.as_ref(), server_name, registration).await?)
+    let client_config =
+        ClientConfig::default().request_config(RequestConfig::default().disable_retry());
+
+    Ok(Appservice::new_with_config(
+        homeserver_url.as_ref(),
+        server_name,
+        registration,
+        client_config,
+    )
+    .await?)
 }
 
-fn member_json() -> serde_json::Value {
-    json!({
-        "content": {
-            "avatar_url": null,
-            "displayname": "example",
-            "membership": "join"
-        },
-        "event_id": "$151800140517rfvjc:localhost",
-        "membership": "join",
-        "origin_server_ts": 151800140,
-        "room_id": "!ahpSDaDUPCCqktjUEF:localhost",
-        "sender": "@example:localhost",
-        "state_key": "@example:localhost",
-        "type": "m.room.member",
-        "prev_content": {
-            "avatar_url": null,
-            "displayname": "example",
-            "membership": "invite"
-        },
-        "unsigned": {
-            "age": 297036,
-            "replaces_state": "$151800111315tsynI:localhost"
-        }
-    })
+#[async_test]
+async fn test_register_virtual_user() -> Result<()> {
+    let appservice = appservice(None).await?;
+
+    let localpart = "someone";
+    let _mock = mockito::mock("POST", "/_matrix/client/r0/register")
+        .match_query(mockito::Matcher::Missing)
+        .match_header(
+            "authorization",
+            mockito::Matcher::Exact(format!("Bearer {}", appservice.registration().as_token)),
+        )
+        .match_body(mockito::Matcher::Json(json!({
+            "username": localpart.to_owned(),
+            "type": "m.login.application_service"
+        })))
+        .with_body(format!(
+            r#"{{
+            "access_token": "abc123",
+            "device_id": "GHTYAJCE",
+            "user_id": "@{localpart}:localhost"
+        }}"#,
+            localpart = localpart
+        ))
+        .create();
+
+    appservice.register_virtual_user("someone").await?;
+
+    Ok(())
 }
 
 #[async_test]
 async fn test_put_transaction() -> Result<()> {
-    let appservice = appservice(None).await?;
-
-    let transactions = r#"{
-        "events": [
-            {
-                "content": {},
-                "type": "m.dummy"
-            }
-        ]
-    }"#;
-
     let uri = "/_matrix/app/v1/transactions/1?access_token=hs_token";
-    let transactions: serde_json::Value = serde_json::from_str(transactions)?;
+
+    let mut transaction_builder = TransactionBuilder::new();
+    transaction_builder.add_room_event(EventsJson::Member);
+    let transaction = transaction_builder.build_json_transaction();
+
+    let appservice = appservice(None).await?;
 
     #[cfg(feature = "warp")]
     let status = warp::test::request()
         .method("PUT")
         .path(uri)
-        .json(&transactions)
+        .json(&transaction)
         .filter(&appservice.warp_filter())
         .await
         .unwrap()
@@ -96,7 +107,7 @@ async fn test_put_transaction() -> Result<()> {
         let app =
             actix_test::init_service(ActixApp::new().service(appservice.actix_service())).await;
 
-        let req = actix_test::TestRequest::put().uri(uri).set_json(&transactions).to_request();
+        let req = actix_test::TestRequest::put().uri(uri).set_json(&transaction).to_request();
 
         actix_test::call_service(&app, req).await.status()
     };
@@ -170,25 +181,19 @@ async fn test_get_room() -> Result<()> {
 
 #[async_test]
 async fn test_invalid_access_token() -> Result<()> {
-    let appservice = appservice(None).await?;
-
-    let transactions = r#"{
-        "events": [
-            {
-                "content": {},
-                "type": "m.dummy"
-            }
-        ]
-    }"#;
-
-    let transactions: serde_json::Value = serde_json::from_str(transactions).unwrap();
     let uri = "/_matrix/app/v1/transactions/1?access_token=invalid_token";
+
+    let mut transaction_builder = TransactionBuilder::new();
+    let transaction =
+        transaction_builder.add_room_event(EventsJson::Member).build_json_transaction();
+
+    let appservice = appservice(None).await?;
 
     #[cfg(feature = "warp")]
     let status = warp::test::request()
         .method("PUT")
         .path(uri)
-        .json(&transactions)
+        .json(&transaction)
         .filter(&appservice.warp_filter())
         .await
         .unwrap()
@@ -200,7 +205,7 @@ async fn test_invalid_access_token() -> Result<()> {
         let app =
             actix_test::init_service(ActixApp::new().service(appservice.actix_service())).await;
 
-        let req = actix_test::TestRequest::put().uri(uri).set_json(&transactions).to_request();
+        let req = actix_test::TestRequest::put().uri(uri).set_json(&transaction).to_request();
 
         actix_test::call_service(&app, req).await.status()
     };
@@ -212,27 +217,20 @@ async fn test_invalid_access_token() -> Result<()> {
 
 #[async_test]
 async fn test_no_access_token() -> Result<()> {
-    let appservice = appservice(None).await?;
-
-    let transactions = r#"{
-        "events": [
-            {
-                "content": {},
-                "type": "m.dummy"
-            }
-        ]
-    }"#;
-
-    let transactions: serde_json::Value = serde_json::from_str(transactions).unwrap();
-
     let uri = "/_matrix/app/v1/transactions/1";
+
+    let mut transaction_builder = TransactionBuilder::new();
+    transaction_builder.add_room_event(EventsJson::Member);
+    let transaction = transaction_builder.build_json_transaction();
+
+    let appservice = appservice(None).await?;
 
     #[cfg(feature = "warp")]
     {
         let status = warp::test::request()
             .method("PUT")
             .path(uri)
-            .json(&transactions)
+            .json(&transaction)
             .filter(&appservice.warp_filter())
             .await
             .unwrap()
@@ -247,7 +245,7 @@ async fn test_no_access_token() -> Result<()> {
         let app =
             actix_test::init_service(ActixApp::new().service(appservice.actix_service())).await;
 
-        let req = actix_test::TestRequest::put().uri(uri).set_json(&transactions).to_request();
+        let req = actix_test::TestRequest::put().uri(uri).set_json(&transaction).to_request();
 
         let resp = actix_test::call_service(&app, req).await;
 
@@ -280,7 +278,8 @@ async fn test_event_handler() -> Result<()> {
 
     appservice.set_event_handler(Box::new(Example::new())).await?;
 
-    let event = serde_json::from_value::<AnyStateEvent>(member_json()).unwrap();
+    let event =
+        serde_json::from_value::<AnyStateEvent>(value_with_room_id(&test_json::MEMBER)).unwrap();
     let event: Raw<AnyRoomEvent> = AnyRoomEvent::State(event).into();
     let events = vec![event];
 

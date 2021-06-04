@@ -94,10 +94,7 @@ pub use matrix_sdk::api_appservice as api;
 use matrix_sdk::{
     api::{
         error::ErrorKind,
-        r0::{
-            account::register::{LoginType, Request as RegistrationRequest},
-            uiaa::UiaaResponse,
-        },
+        r0::{account::register, uiaa::UiaaResponse},
     },
     api_appservice::Registration,
     assign,
@@ -106,7 +103,7 @@ use matrix_sdk::{
     Client, ClientConfig, EventHandler, FromHttpResponseError, HttpError, ServerError, Session,
 };
 use regex::Regex;
-use sdk::{Bytes, RequestConfig};
+use sdk::Bytes;
 use tracing::warn;
 
 #[cfg(feature = "actix")]
@@ -253,8 +250,8 @@ impl Appservice {
 
         let appservice = Appservice { homeserver_url, server_name, registration, clients };
 
-        // we cache the [`MainUser`] by default
-        appservice.virtual_user_with_config(sender_localpart, client_config).await?;
+        // we create and cache the [`MainUser`] by default
+        appservice.create_and_cache_client(&sender_localpart, client_config).await?;
 
         Ok(appservice)
     }
@@ -276,18 +273,19 @@ impl Appservice {
     ///
     /// [registration]: https://matrix.org/docs/spec/application_service/r0.1.2#registration
     /// [assert the identity]: https://matrix.org/docs/spec/application_service/r0.1.2#identity-assertion
-    pub async fn virtual_user(&self, localpart: impl AsRef<str>) -> Result<Client> {
-        let client = self.virtual_user_with_config(localpart, ClientConfig::default()).await?;
+    pub async fn virtual_user_client(&self, localpart: impl AsRef<str>) -> Result<Client> {
+        let client =
+            self.virtual_user_client_with_config(localpart, ClientConfig::default()).await?;
 
         Ok(client)
     }
 
-    /// Same as [`Self::virtual_user()`] but with the ability to pass in a
-    /// [`ClientConfig`]
+    /// Same as [`Self::virtual_user_client()`] but with the ability to pass in
+    /// a [`ClientConfig`]
     ///
     /// Since this method is a singleton follow-up calls with different
     /// [`ClientConfig`]s will be ignored.
-    pub async fn virtual_user_with_config(
+    pub async fn virtual_user_client_with_config(
         &self,
         localpart: impl AsRef<str>,
         config: ClientConfig,
@@ -298,29 +296,40 @@ impl Appservice {
         let client = if let Some(client) = self.clients.get(localpart) {
             client.clone()
         } else {
-            let user_id = UserId::parse_with_server_name(localpart, &self.server_name)?;
-
-            // The `as_token` in the `Session` maps to the [`MainUser`]
-            // (`sender_localpart`) by default, so we don't need to assert identity
-            // in that case
-            if localpart != self.registration.sender_localpart {
-                config.get_request_config().assert_identity();
-            }
-
-            let client = Client::new_with_config(self.homeserver_url.clone(), config)?;
-
-            let session = Session {
-                access_token: self.registration.as_token.clone(),
-                user_id: user_id.clone(),
-                // TODO: expose & proper E2EE
-                device_id: DeviceId::new(),
-            };
-
-            client.restore_login(session).await?;
-            self.clients.insert(localpart.to_owned(), client.clone());
-
-            client
+            self.create_and_cache_client(localpart, config).await?
         };
+
+        Ok(client)
+    }
+
+    async fn create_and_cache_client(
+        &self,
+        localpart: &str,
+        config: ClientConfig,
+    ) -> Result<Client> {
+        let user_id = UserId::parse_with_server_name(localpart, &self.server_name)?;
+
+        // The `as_token` in the `Session` maps to the [`MainUser`]
+        // (`sender_localpart`) by default, so we don't need to assert identity
+        // in that case
+        let config = if localpart != self.registration.sender_localpart {
+            let request_config = config.get_request_config().assert_identity();
+            config.request_config(request_config)
+        } else {
+            config
+        };
+
+        let client = Client::new_with_config(self.homeserver_url.clone(), config)?;
+
+        let session = Session {
+            access_token: self.registration.as_token.clone(),
+            user_id: user_id.clone(),
+            // TODO: expose & proper E2EE
+            device_id: DeviceId::new(),
+        };
+
+        client.restore_login(session).await?;
+        self.clients.insert(localpart.to_owned(), client.clone());
 
         Ok(client)
     }
@@ -328,8 +337,8 @@ impl Appservice {
     /// Get cached [`Client`]
     ///
     /// Will return the client for the given `localpart` if previously
-    /// constructed with [`Self::virtual_user()`] or
-    /// [`Self::virtual_user_with_config()`].
+    /// constructed with [`Self::virtual_user_client()`] or
+    /// [`Self::virtual_user_client_with_config()`].
     ///
     /// If no `localpart` is given it assumes the [`MainUser`]'s `localpart`. If
     /// no client for `localpart` is found it will return an Error.
@@ -352,7 +361,7 @@ impl Appservice {
         Ok(())
     }
 
-    /// Register a virtual user by sending a [`RegistrationRequest`] to the
+    /// Register a virtual user by sending a [`register::Request`] to the
     /// homeserver
     ///
     /// # Arguments
@@ -360,17 +369,13 @@ impl Appservice {
     /// * `localpart` - The localpart of the user to register. Must be covered
     ///   by the namespaces in the [`Registration`] in order to succeed.
     pub async fn register_virtual_user(&self, localpart: impl AsRef<str>) -> Result<()> {
-        let request = assign!(RegistrationRequest::new(), {
+        let request = assign!(register::Request::new(), {
             username: Some(localpart.as_ref()),
-            login_type: Some(&LoginType::ApplicationService),
+            login_type: Some(&register::LoginType::ApplicationService),
         });
 
         let client = self.get_cached_client(None)?;
-
-        // TODO: use `client.register()` instead
-        // blocked by: https://github.com/seanmonstar/warp/pull/861
-        let config = Some(RequestConfig::new().force_auth());
-        match client.send(request, config).await {
+        match client.register(request).await {
             Ok(_) => (),
             Err(error) => match error {
                 matrix_sdk::Error::Http(HttpError::UiaaError(FromHttpResponseError::Http(

@@ -13,6 +13,8 @@ use matrix_sdk_common::{
 pub use matrix_sdk_test_macros::async_test;
 use serde_json::Value as JsonValue;
 
+#[cfg(feature = "appservice")]
+pub mod appservice;
 pub mod test_json;
 
 /// Embedded event files
