@@ -104,7 +104,7 @@ use matrix_sdk::{
 };
 use regex::Regex;
 use sdk::Bytes;
-use tracing::warn;
+use tracing::{info, warn};
 
 #[cfg(feature = "actix")]
 mod actix;
@@ -266,6 +266,10 @@ impl Appservice {
     /// based on the `localpart`. The cached [`Client`] can be retrieved either
     /// by calling this method again or by calling [`Self::get_cached_client()`]
     /// which is non-async convenience wrapper.
+    ///
+    /// Note that if you want to do actions like joining rooms with a virtual
+    /// user it needs to be registered first. `Self::register_virtual_user()`
+    /// can be used for that purpose.
     ///
     /// # Arguments
     ///
@@ -444,6 +448,10 @@ impl Appservice {
     /// This is a blocking call that tries to listen on the provided host and
     /// port
     pub async fn run(&self, host: impl Into<String>, port: impl Into<u16>) -> Result<()> {
+        let host = host.into();
+        let port = port.into();
+        info!("Starting Appservice on {}:{}", &host, &port);
+
         #[cfg(feature = "actix")]
         {
             actix::run_server(self.clone(), host, port).await?;

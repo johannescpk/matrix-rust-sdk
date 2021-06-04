@@ -76,7 +76,7 @@ async fn test_register_virtual_user() -> Result<()> {
         ))
         .create();
 
-    appservice.register_virtual_user("someone").await?;
+    appservice.register_virtual_user(localpart).await?;
 
     Ok(())
 }
