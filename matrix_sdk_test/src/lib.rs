@@ -13,6 +13,8 @@ use matrix_sdk_common::{
 pub use matrix_sdk_test_macros::async_test;
 use serde_json::Value as JsonValue;
 
+#[cfg(feature = "appservice")]
+pub mod appservice;
 pub mod test_json;
 
 /// Embedded event files
@@ -348,7 +350,6 @@ impl EventBuilder {
 
         SyncResponse::try_from_http_response(response).unwrap()
     }
-
     fn generate_sync_token(&self) -> String {
         format!("t392-516_47314_0_7_1_1_1_11444_{}", self.batch_counter)
     }

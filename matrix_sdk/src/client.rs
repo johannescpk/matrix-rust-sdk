@@ -1364,7 +1364,7 @@ impl Client {
         let config = None;
 
         #[cfg(feature = "appservice")]
-        let config = Some(RequestConfig::new().force_auth());
+        let config = Some(self.http_client.request_config.force_auth());
 
         let request = registration.into();
         self.send(request, config).await
