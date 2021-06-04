@@ -106,7 +106,7 @@ use matrix_sdk::{
     Client, ClientConfig, EventHandler, FromHttpResponseError, HttpError, ServerError, Session,
 };
 use regex::Regex;
-use sdk::Bytes;
+use sdk::{Bytes, RequestConfig};
 use tracing::warn;
 
 #[cfg(feature = "actix")]
@@ -359,7 +359,7 @@ impl Appservice {
     ///
     /// * `localpart` - The localpart of the user to register. Must be covered
     ///   by the namespaces in the [`Registration`] in order to succeed.
-    pub async fn register(&self, localpart: impl AsRef<str>) -> Result<()> {
+    pub async fn register_virtual_user(&self, localpart: impl AsRef<str>) -> Result<()> {
         let request = assign!(RegistrationRequest::new(), {
             username: Some(localpart.as_ref()),
             login_type: Some(&LoginType::ApplicationService),
@@ -369,7 +369,8 @@ impl Appservice {
 
         // TODO: use `client.register()` instead
         // blocked by: https://github.com/seanmonstar/warp/pull/861
-        match client.send(request, None).await {
+        let config = Some(RequestConfig::new().force_auth());
+        match client.send(request, config).await {
             Ok(_) => (),
             Err(error) => match error {
                 matrix_sdk::Error::Http(HttpError::UiaaError(FromHttpResponseError::Http(
