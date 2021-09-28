@@ -821,10 +821,10 @@ impl Client {
         let homeserver = self.homeserver().await;
         info!(homeserver = homeserver.as_str(), user = user.as_ref(), "Logging in");
 
-        let login_info = login::LoginInfo::Password {
-            identifier: UserIdentifier::MatrixId(user.as_ref()),
+        let login_info = login::LoginInfo::Password(login::Password::new(
+            UserIdentifier::MatrixId(user.as_ref()),
             password,
-        };
+        ));
 
         let request = assign!(login::Request::new(login_info), {
             device_id: device_id.map(|d| d.into()),
@@ -1104,7 +1104,7 @@ impl Client {
 
         let request = assign!(
             login::Request::new(
-                login::LoginInfo::Token { token },
+                login::LoginInfo::Token(login::Token::new(token)),
             ), {
                 device_id: device_id.map(|d| d.into()),
                 initial_device_display_name,
